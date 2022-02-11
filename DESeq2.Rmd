@@ -1,0 +1,213 @@
+---
+title: 'Differential gene expression analysis based on the negative binomial distribution (DESeq2) '
+author: "Wisam"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+      toc: true
+      toc_depth: 4
+      toc_float: true
+      code_download: true
+---
+
+# Installing DESeq2
+DESeq2 is a bioconductor package that should be installed via two main ways as follows:
+
+#### Via bioconductor
+
+
+```{r install_bioc, echo=TRUE}
+#BiocManager::install('DESeq2')
+
+```
+
+#### Via DESeq2 github repository
+
+
+```{r install_git, echo=TRUE}
+library(devtools)
+#install_github('mikelove/DESeq2')
+```
+
+
+
+```{r phyloseq, echo=FALSE, message=FALSE, error=FALSE, warning=FALSE}
+library(knitr)
+library(phyloseq)
+library(DESeq2)
+library(vegan)
+#library(mixOmics)
+library(ggplot2)
+library(tictoc)
+library(tidyverse)
+library(tidyr)
+options(max.print="75")
+  knitr::opts_chunk$set(fig.width=8,
+                        fig.height=6,
+                        eval=TRUE,
+                        cache=TRUE,
+                        echo=TRUE,
+                        prompt=FALSE,
+                        tidy=TRUE,
+                        comment=NA,
+                        message=FALSE,
+                        warning=FALSE)
+opts_knit$set(width=75)
+```
+
+# DESeq2 tutorials
+DESeq2 is one of the important parametric methods that have been used to analyze RNA-seq data.
+
+### Main tutorial
+[Click](http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html)
+
+### Different workshops
+
+* [FIrst](https://www.huber.embl.de/users/msmith/csama2019/materials/lectures/differential-expression/2019-07__CSAMA__DESeq2.pdf)
+
+* This book is very useful
+[Modern Statistics for Modern Biology](http://web.stanford.edu/class/bios221/book/index.html)
+
+* **Phyloseq dataset**
+From the same paper [Temporal and spatial variation of the human microbiota during pregnancy](https://www.pnas.org/content/112/35/11060)
+
+# Working with DESeq2
+
+### Dataset from stool
+
+* **Phyloseq dataset**
+From this paper [Temporal and spatial variation of the human microbiota during pregnancy](https://www.pnas.org/content/112/35/11060)
+
+```{r data_vagina, echo=T, message=FALSE, error=FALSE}
+
+da<- load('RDA/PregnancyClosed15.Rdata')
+site <- "Stool"
+phy <- PSPreg[[site]]
+phy
+
+```
+
+**Remove rare taxa**
+
+
+```{r transform-data, message=FALSE, echo=FALSE, warning=FALSE}
+phy_comp <- transform_sample_counts(phy, function(OTU) OTU/sum(OTU))
+phy_comp<-prune_taxa(taxa_sums(phy_comp) > 0, phy_comp)
+taxa<-names(taxa_sums(phy_comp))
+
+phy<-prune_taxa(taxa, phy)
+### Check up for random
+#View(otu_table(phy_30)@.Data['1901002288','4468234'])
+#View(otu_table(phy)@.Data['1901002288','4468234'])
+#View(otu_table(phy_comp)@.Data['1901002288','4468234'])
+phy
+```
+In our phyloseq dataset **taxa are columns** I shall change that, i.e. taxa are rows.
+I think it might be other ways, but it works.
+
+```{r deseq2_prep, message=FALSE, echo=T, warning=FALSE}
+OTU1 = as(otu_table(phy), "matrix")
+if(taxa_are_rows(phy)== FALSE){OTU1 <- t(OTU1)}
+OTUdf = as.data.frame(OTU1)
+otu_table(phy)<- otu_table(OTUdf, taxa_are_rows = T)
+identical(rownames(otu_table(phy)),rownames(tax_table(phy)))
+```
+
+## Genus level
+
+
+```{r transform-genus, message=FALSE, echo=FALSE, warning=FALSE}
+phy_genus<- microbiome::aggregate_taxa(phy, 'Genus')
+
+```
+
+
+
+
+
+#### DESeq2 result table
+
+Showing the only taxa with adjusted p_value less than 0.05
+
+```{r deseq2_result, message=FALSE, echo=F, warning=FALSE}
+ds2<-phyloseq_to_deseq2(physeq = phy_genus, ~ Race)
+ddsG<-estimateSizeFactors(ds2, type = 'poscounts') ##By Micheal
+
+dss<- DESeq(ddsG)
+res<- results(dss)
+df<-as.data.frame(res)
+df <- df %>% arrange(padj, desc(abs(log2FoldChange))) %>% filter(padj < 0.05)
+
+library(knitr)
+kable(df)
+```
+
+
+**To understand the result table, see the following notes.**
+
+*	baseMean, is the average of the normalized count values, dividing by size factors, taken over all samples.
+
+*	Log2FoldChange, is the effect size estimate. It tells us how much the gene's expression seems to have changed due to certain factors in the control and study groups for example. This value is reported on a logarithmic scale to base 2: for example, a log2 fold change of 1.5 means that the gene's expression is increased by a multiplicative factor of 2^1.5≈2.82.  Of course, this estimate has an uncertainty associated with it, which is available in the column lfcSE.
+
+* lfcSE, the standard error estimate for the log2 fold change estimate
+
+*	stat, is the Wald statistic: the log2FoldChange divided by lfcSE (the second column divided by the third), which is compared to a standard Normal distribution to generate a two-tailed pvalue. For the likelihood ratio test (LRT), stat is the difference in deviance between the reduced model and the full model, which is compared to a chi-squared distribution to generate a pvalue.
+
+*	pvalue, the raw p-values.
+
+*	padj, adjusted p-value.
+
+* taxon, the genes names, or the clustered genes as in my table (Operational taxonomic unit, OTU)
+
+#### Plot
+It is showing the differentiated genes. 
+
+
+```{r deseq2_plot, message=FALSE, echo=F, warning=FALSE, eval=TRUE}
+p<-DESeq2::plotMA(res)
+print(p)
+```
+
+# More plots
+
+Plotting the relative abundance (CLR) for every gene in the previous table against the 'Race' variable factors. These plots are helpful to see the efficiency of DESeq2 in recognizing the differentiated genes
+
+```{r tops_genus, echo=FALSE, warning=FALSE, message=FALSE, fig.show="hold", out.width = "33%", fig.height=6, fig.width=6}
+library(knitr)
+library(ggbeeswarm)
+theme_set(theme_bw(base_size = 15))
+top.taxa<-rownames(df)
+df1 <- get_variable(phy_genus)
+ps <- microbiome::transform(phy_genus, 'clr')
+for (tax in top.taxa) {
+  df1$taxa <- get_taxa(ps)[tax, ]
+  p <- ggplot(df1, aes(x = Race, y = taxa, fill= Race)) + geom_boxplot()+ geom_jitter(width = .2)+ theme(legend.position="none", axis.text.x = element_text(angle = 60, hjust = 1))+ labs(x = "Genus", y = "Relative abundance (CLR)", title = tax)
+  print(p)
+}
+
+
+```
+
+
+
+# DESeq2 pairwise comparison 
+
+DESeq2 pairwise comparison analysis for the categorical variable Race factors.
+I shall use "American Indian" versus "White", and we can make the same for the whole combinations of pairwise groups.
+
+```{r tops_genus_pairwise, echo=F, warning=FALSE, message=FALSE, fig.show="hold", out.width = "33%", fig.height=6, fig.width=6}
+df1$Race<- factor(df1$Race, levels = c('American Indian', 'White','Asian-Japanese','Asian-Unspecified','Pacific Islander','Black','Other (Specify below)','Asian-Chinese','Indian'))
+sample_data(phy_genus)<- df1
+##
+ds2_1<-phyloseq_to_deseq2(physeq = phy_genus, ~ Race)
+ddsG<-estimateSizeFactors(ds2_1, type = 'poscounts') ##By Micheal
+
+dss<- DESeq(ddsG)
+e_Am_Wh<- as.data.frame(results(dss, contrast=c("Race","American Indian","White")))
+e_Am_Wh <- e_Am_Wh %>% arrange(padj, desc(abs(log2FoldChange))) %>% filter(padj < 0.05)
+
+library(knitr)
+kable(e_Am_Wh)
+```
+
+
